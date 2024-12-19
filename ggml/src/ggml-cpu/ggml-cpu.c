@@ -36,6 +36,10 @@
 #include <syscall.h>
 #endif
 
+#if defined(__s390x__) && defined(__VEC__)
+#include <vecintrin.h>
+#endif
+
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -238,6 +242,8 @@ typedef pthread_t ggml_thread_t;
 #else
 #if defined(__POWER9_VECTOR__)
 #define CACHE_LINE_SIZE 128
+#elif defined(__s390x__)
+#define CACHE_LINE_SIZE 256
 #else
 #define CACHE_LINE_SIZE 64
 #endif
@@ -1217,6 +1223,73 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 #define GGML_F16_VEC_ADD             GGML_F32Cx4_ADD
 #define GGML_F16_VEC_MUL             GGML_F32Cx4_MUL
 #define GGML_F16_VEC_REDUCE          GGML_F32Cx4_REDUCE
+
+#elif defined(__s390x__) && defined(__VEC__)
+
+#define vec_add(a, b) ((a) + (b))
+#define vec_mul(a, b) ((a) * (b))
+
+#define GGML_SIMD
+
+// F32 s390x
+#define GGML_F32_STEP 64  // TODO: Revisit this
+#define GGML_F32_EPR  4
+
+#define GGML_F32x4              __vector float
+#define GGML_F32x4_ZERO         0.0f
+#define GGML_F32x4_SET1         vec_splats
+#define GGML_F32x4_LOAD(p)      vec_xl(0, p)
+#define GGML_F32x4_STORE(p, r)  *((GGML_F32x4 *)(p)) = (r)
+#define GGML_F32x4_FMA(a, b, c) vec_madd(b, c, a)
+#define GGML_F32x4_ADD          vec_add
+#define GGML_F32x4_MUL          vec_mul
+#define GGML_F32x4_REDUCE(res, x)             \
+{                                             \
+  int offset = GGML_F32_ARR >> 1;             \
+  for (int i = 0; i < offset; ++i) {          \
+    x[i] = vec_add(x[i], x[offset + i]);      \
+  }                                           \
+  offset >>= 1;                               \
+  for (int i = 0; i < offset; ++i) {          \
+    x[i] = vec_add(x[i], x[offset + i]);      \
+  }                                           \
+  offset >>= 1;                               \
+  for (int i = 0; i < offset; ++i) {          \
+    x[i] = vec_add(x[i], x[offset + i]);      \
+  }                                           \
+  res = (ggml_float)(                         \
+        vec_extract(x[0], 0) +                \
+        vec_extract(x[0], 1) +                \
+        vec_extract(x[0], 2) +                \
+        vec_extract(x[0], 3));                \
+}
+
+#define GGML_F32_VEC        GGML_F32x4
+#define GGML_F32_VEC_ZERO   GGML_F32x4_ZERO
+#define GGML_F32_VEC_SET1   GGML_F32x4_SET1
+#define GGML_F32_VEC_LOAD   GGML_F32x4_LOAD
+#define GGML_F32_VEC_STORE  GGML_F32x4_STORE
+#define GGML_F32_VEC_FMA    GGML_F32x4_FMA
+#define GGML_F32_VEC_ADD    GGML_F32x4_ADD
+#define GGML_F32_VEC_MUL    GGML_F32x4_MUL
+#define GGML_F32_VEC_REDUCE GGML_F32x4_REDUCE
+
+// F16 s390x
+#define GGML_F16_STEP       GGML_F32_STEP
+#define GGML_F16_EPR        GGML_F32_EPR
+
+#define GGML_F16_VEC        GGML_F32x4
+#define GGML_F16_VEC_ZERO   GGML_F32x4_ZERO
+#define GGML_F16_VEC_SET1   GGML_F32x4_SET1
+#define GGML_F16_VEC_FMA    GGML_F32x4_FMA
+#define GGML_F16_VEC_ADD    GGML_F32x4_ADD
+#define GGML_F16_VEC_MUL    GGML_F32x4_MUL
+#define GGML_F16_VEC_REDUCE GGML_F32x4_REDUCE
+#define GGML_F16_VEC_LOAD(p, i) (i & 0x1)   ? \
+  vec_float(vec_unpackh(vec_xl(0, p)))      : \
+  vec_float(vec_unpackl(vec_xl(0, p)))
+#define GGML_ENDIAN_BYTE(i) ((unsigned char *)&(uint16_t){1})[i]
+#define GGML_F16_VEC_STORE(p, r, i) GGML_F32x4_STORE(p, r[i])
 
 #endif
 
